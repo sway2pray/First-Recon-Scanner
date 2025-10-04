@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "frscan"
+version = "0.1.1"
+description = "A simple automation script of basic recon tasks"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Linux",
+]
+
+[project.scripts]
+frscan = "frscan.frscan:main"
+
+[project.urls]
+Homepage = "https://github.com/sway2pray/First-Recon-Scanner"
