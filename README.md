@@ -13,15 +13,14 @@ Written in Python standart libs.
 SMB, DBs, WinRM, LDAP, SNMP, vhost enumeration, maybe SQLmap and other.
 
 ## Prerequisites & Install
-CLI tools: nmap, ffuf, ping
-
-Dictionaries - [SecLists](https://github.com/danielmiessler/SecLists/tree/master)
+### CLI tools: nmap, ffuf, ping
+### Dictionaries - [SecLists](https://github.com/danielmiessler/SecLists/tree/master)
 
 1.Git clone this repo.
 
 2.Install with pip.
 ```bash
-cd 'First Recon Scan'/
+cd 'First-Recon-Scan'/
 
 pip install -e
 ```
