@@ -1,4 +1,4 @@
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 import subprocess as sub
 import argparse
 import requests
@@ -7,9 +7,14 @@ import re
 import os
 
 DEFAULT_SECLISTS_PATH:str = '/usr/share/SecLists'
-global path_to_seclists
+path_to_seclists:str = ''
 
 def update_seclists_path():
+    """Checks for SecLists dictionary path.
+    In case of abscence in default location prompts user for path storing
+    result in "/home/user/.frscan/config.txt"""
+
+    global path_to_seclists
     path_to_seclists = DEFAULT_SECLISTS_PATH
 
     if not os.path.isdir(path_to_seclists):
@@ -58,7 +63,11 @@ def update_seclists_path():
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='A First Recon Scanner')
+    """Parses user passed arguments"""
+
+    parser = argparse.ArgumentParser(description='First Recon Scanner'+\
+                                    ' - simple automation script of basic'+\
+                                                            ' recon tasks.')
     
     parser.add_argument('--target',
                         '-t',
@@ -73,7 +82,7 @@ def parse_args() -> argparse.Namespace:
                         '-p',
                         type=str,
                         default='http',
-                        help='Set web protocol to use "-p https". Defualt is http')
+                        help='Set web protocol to use "-p https". Default is http.')
     parser.add_argument('--verbose',
                         '-v',
                         action='store_true',
@@ -86,6 +95,8 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 def is_target_pings(args:argparse.Namespace) -> bool:
+    """Pinging target to check if it's alive"""
+
     try:
         result = sub.run(
             ['ping', '-c', '3', args.target],  # -c 3: Send 3 packets
@@ -100,6 +111,9 @@ def is_target_pings(args:argparse.Namespace) -> bool:
         return False
 
 def nmap_get_ports(stdout, args:argparse.Namespace) -> tuple:
+    """Gets open TCP port numbers for subprograms to run their scans on"""
+
+    print("\nStarted initial nmap scan to get open tcp ports")
     ports:list = []
 
     try:
@@ -124,17 +138,25 @@ def nmap_get_ports(stdout, args:argparse.Namespace) -> tuple:
         content:str = file.read()
         ports:list = re.findall(r'\d+(?=\/)', content)
 
+    print('\nPorts found:', ','.join(ports))
     return (ports, True)
 
 def nmap_scan(stdout, args:list) -> list:
+    """Performs nmap scan with specified args list"""
+
+    print('\nScan launched with params:\n\t', ' '.join(args))
     try:
         sub.run(args, check=False, stdout=stdout)
+        print(f'\nScan finished at "{args[-1]}"')        
         return []
     except Exception as exc:
         return [args, exc]
 
 def nmap_scans(stdout, args:argparse.Namespace, ports:list):
-    print('\nStarted sCsV and UDP nmap scans:')
+    """Launching several nmap scans on diffrent threads and aggregates results
+    in one file"""
+
+    print('\nLaunching nmap scans:')
     requests:list = [[  'sudo',
                         'nmap',
                         args.target,
@@ -166,9 +188,13 @@ def nmap_scans(stdout, args:argparse.Namespace, ports:list):
                 file.write('\n Catched an error: ' + str(result[1]))
 
 def get_web_ports(all_ports:list) -> list:
+    """Returns 443 and 80 ports from list if exists"""
+
     return [port for port in all_ports if port == '80' or port == '443']
 
 def is_fuzzable(stdout, args:argparse.Namespace, port) -> bool:
+    """Checks for 200 status code return from target, otherwise negates"""
+
     try:
         response = requests.get(f'{args.protocol}://{args.target}:{port}', timeout=10)
         return response.status_code == 200
@@ -176,6 +202,8 @@ def is_fuzzable(stdout, args:argparse.Namespace, port) -> bool:
         return False
 
 def fuzz(stdout, args:argparse.Namespace, port:str, fuzz_dict:str):
+    """Performs web fuzzing with passed dictionary"""
+
     if not os.path.isfile(f'{path_to_seclists}/Discovery/Web-Content/'+\
                                                     f'{fuzz_dict}.txt'):
         return(f"Path to dictionary {path_to_seclists}/Discovery/Web-Content"+\
@@ -187,6 +215,8 @@ def fuzz(stdout, args:argparse.Namespace, port:str, fuzz_dict:str):
         return (f"\n{args.protocol}://{args.target}:{port} didn't respond with "+\
             "200 code or reached 10 seconds time interval. Fuzz aborted.\n")
 
+    print(f'\nFuzzing on "{args.protocol}://{args.target}:{port}/FUZZ"\n',
+            f'with "{path_to_seclists}/Discovery/Web-Content/{fuzz_dict}.txt"')
     try:
         sub.run(['ffuf',
                 '-w',
@@ -202,26 +232,31 @@ def fuzz(stdout, args:argparse.Namespace, port:str, fuzz_dict:str):
 
     except Exception as exc:
         return (exc)
+    
+    try:
+        with open(f'tmp/{fuzz_dict}.json', 'r', encoding='utf-8') as file:
+            content:dict = json.load(file)
+            results:list = content['results']
+            fuzz_commands.append(content['commandline'])
 
-    with open(f'tmp/{fuzz_dict}.json', 'r', encoding='utf-8') as file:
-        content:dict = json.load(file)
-        results:list = content['results']
-        fuzz_commands.append(content['commandline'])
+            for key in results:
+                fuzz2status[key['input']['FUZZ']] = key['status']
+    except Exception as exc:
+        return (exc)
 
-        for key in results:
-            fuzz2status[key['input']['FUZZ']] = key['status']
     
     return (fuzz_commands, fuzz2status)
 
 def web_scans(stdout, args:argparse.Namespace, ports:list=[]):
+    """Launches fuzzes with different dictionaries on several threads"""
+
     print('\nStarted web scans.')
 
     if args.webscan:
         ports = args.webscan.split(',')
-        print('\tWeb ports to scan:', ', '.join(ports))
     else:
         ports = get_web_ports(ports)
-        print('\tWeb ports to scan:', ', '.join(ports))
+    print('\tWeb ports to scan:', ', '.join(ports))
 
     results:dict = {}
     fuzz2status:dict = {}
@@ -238,7 +273,7 @@ def web_scans(stdout, args:argparse.Namespace, ports:list=[]):
             
             if len(result) > 2:
                 print(f'\nFuzzing failed with: {result}')
-                return
+                continue
             
             fuzz_commands += result[0]
             fuzz2status = fuzz2status | result[1]
@@ -272,10 +307,17 @@ def web_scans(stdout, args:argparse.Namespace, ports:list=[]):
             for fuzz_res in fuzz2status:
                 output += f'\t{fuzz2status[fuzz_res]} {fuzz_res}\n'
             file.write(output)
+    print('\nWeb fuzzing finished at "results/2_web_fuzzing.txt"')
 
 def main():
+    """Main function.
+    Performs initial checks on user input.
+    Passes results from initial nmap scan to other subprograms to run
+    on parallel"""
+
     args:argparse.Namespace = parse_args()
 
+    ##User input checks
     path_to_seclists = update_seclists_path()
     if not path_to_seclists:
         return
@@ -294,14 +336,14 @@ def main():
     
     if not os.path.isdir('results'):
         os.mkdir('results')
-
+    ##
     stdout = None if args.verbose else sub.DEVNULL
 
-    # Single execute flags
+    ### Single execute flags
     if args.webscan:
         web_scans(stdout, args, [])
         return
-    
+    ###
     ports_scan_res = nmap_get_ports(stdout, args)
     if not ports_scan_res[1]:
         print('\nInitial ports scan failed with: ', ports_scan_res[1])
@@ -309,11 +351,11 @@ def main():
 
     ports:list = ports_scan_res[0]
 
-    print(path_to_seclists)
-    # All parallel scans 
+    ####All parallel scans 
     with ThreadPoolExecutor(max_workers=3) as executor:
         future_1 = executor.submit(nmap_scans, stdout, args, ports)
-        future_1 = executor.submit(web_scans, stdout, args, ports)
+        future_2 = executor.submit(web_scans, stdout, args, ports)
+    ####
     print('\nAll scans are finished, results can be viewed in "results" folder.')
 
 if __name__ == '__main__':
