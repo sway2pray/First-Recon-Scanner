@@ -87,11 +87,6 @@ def parse_args() -> argparse.Namespace:
                         '-v',
                         action='store_true',
                         help='Prints output of subprograms')
-    # parser.add_argument('--veryverbose',
-    #                     '-vv',
-    #                     action='store_true',
-    #                     help='Prints all output of subprograms')
-                        
     return parser.parse_args()
 
 def is_target_pings(args:argparse.Namespace) -> bool:
@@ -115,7 +110,7 @@ def nmap_get_ports(stdout, args:argparse.Namespace) -> tuple:
 
     print("\nStarted initial nmap scan to get open tcp ports")
     ports:list = []
-
+    
     try:
         sub.run(['sudo',
                 'nmap',
@@ -201,7 +196,7 @@ def is_fuzzable(stdout, args:argparse.Namespace, port) -> bool:
     except requests.RequestException:
         return False
 
-def fuzz(stdout, args:argparse.Namespace, port:str, fuzz_dict:str):
+def fuzz(stdout, args:argparse.Namespace, port:str, fuzz_dict:str) -> tuple:
     """Performs web fuzzing with passed dictionary"""
 
     if not os.path.isfile(f'{path_to_seclists}/Discovery/Web-Content/'+\
@@ -309,6 +304,127 @@ def web_scans(stdout, args:argparse.Namespace, ports:list=[]):
             file.write(output)
     print('\nWeb fuzzing finished at "results/2_web_fuzzing.txt"')
 
+def get_smb_ports(all_ports:list) -> list:
+    """Returns 139 and 445 ports from list if exists"""
+
+    return [port for port in all_ports if port == '139' or port == '445']
+
+def nxc_smb(args:argparse.Namespace, username:str):
+    """Checks for SMB connection"""
+
+    # clear nxc cache to avoid errors
+    sub.run(['rm', '-rf', '/tmp/nxc_hosted'], check=True)
+
+    try:
+        output = sub.run(['nxc',
+                        'smb',
+                        f'{args.target}',
+                        '-u',
+                        f'{username}',
+                        '-p',
+                        ''], check=False, capture_output=True, text=True)
+        return output
+
+    except Exception as exc:
+        return exc
+
+def is_nxc_success_regex(content) -> bool:
+    result = re.findall(r'(?s).*(\n.*\[\+\].*)$', content)
+    return True if result else False
+
+def get_smb_shares(args:argparse.Namespace, username):
+    """Launches nxc with --shares flag to list SMB shares"""
+    try:
+        output = sub.run(['nxc',
+                        'smb',
+                        f'{args.target}',
+                        '-u',
+                        f'{username}',
+                        '-p',
+                        '',
+                        '--shares'], check=False, capture_output=True, text=True)
+        return output
+
+    except Exception as exc:
+        return exc
+
+def smb_rid_brute(stdout, args:argparse.Namespace, username):
+    """Performs nxc --rid-brute attack"""
+    try:
+        output = sub.run(f"nxc smb {args.target} -u '{username}' -p '' " +\
+                        "--rid-brute | grep -i 'sidtypeuser' | awk "+\
+                        "'{print$6}' | cut -d '\\' -f2 | tee results/3.1_smb_userlist.txt",
+                        shell=True, check=False, stdout=stdout, stderr=stdout)
+        return output
+
+    except Exception as exc:
+        return exc
+
+def is_smb_err_regex(content:str) -> bool:
+    """Returns True if 'error' keyword found in text and otherwise"""
+    result = re.findall(r'\berror\b', content)
+    return True if result else False
+
+def smb_scans(stdout, args:argparse.Namespace, ports:list=[]):
+    """Launches smb scans on anonymous and guest accounts trying
+    to get connections and possibly extract userlist"""
+    output:str = ''
+    success_usernames:list = []
+
+    smb_ports:list = get_smb_ports(ports)
+    if not smb_ports:
+        print("\nSMB service doesn't seems to be running")
+        return
+    print('\nRunning SMB scans')
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_1 = executor.submit(nxc_smb, args, ' ')
+        future_2 = executor.submit(nxc_smb, args, 'guest')
+
+    for future in as_completed([future_1, future_2]):
+        result = future.result()
+        if is_nxc_success_regex(result.stdout):
+            success_usernames.append(result.args[4])
+
+        output += 'Command: ' + ' '.join(result.args) + '\n'
+        output += str(result.stdout) + '\n'
+
+    try:
+        with open('results/3_smb.txt', 'w', encoding='utf-8') as file:
+            file.write(output)
+    except Exception as exc:
+        print('\nError in writing to file results/3_smb.txt: ', exc)
+
+    if not success_usernames:
+        return
+    print('\nChecking availible SMB shares')
+    output = '\n\nSMB shares\n'
+
+    for username in success_usernames:
+        result = get_smb_shares(args, username)
+
+        if type(result) is Exception or is_smb_err_regex(str(result)):
+            output += "\nError in nxc smb shares: " + str(result)
+            continue
+
+        output += 'Command: ' + ' '.join(result.args) + '\n'
+        output += result.stdout + '\n'
+
+    print('\nTrying RID brute to get userlist')
+    output += 'Trying RID brute in case of success userlist will be at ' +\
+                                            'results/3.1_smb_userlist.txt\n'
+    for username in success_usernames:
+        result = smb_rid_brute(stdout, args, username)
+        if stdout == None:
+            print(f'\n{result.stdout}\n{result.stderr}')
+    
+    try:
+        with open('results/3_smb.txt', 'a', encoding='utf-8') as file:
+            file.write(output)
+    except Exception as exc:
+        print('\nError in writing to file results/3_smb.txt: ', exc)
+
+
 def main():
     """Main function.
     Performs initial checks on user input.
@@ -331,6 +447,7 @@ def main():
                 " Aborting program.")
         return
 
+    # add try except
     if not os.path.isdir('tmp'):
         os.mkdir('tmp')
     
@@ -355,6 +472,7 @@ def main():
     with ThreadPoolExecutor(max_workers=3) as executor:
         future_1 = executor.submit(nmap_scans, stdout, args, ports)
         future_2 = executor.submit(web_scans, stdout, args, ports)
+        future_3 = executor.submit(smb_scans, stdout, args, ports)
     ####
     print('\nAll scans are finished, results can be viewed in "results" folder.')
 

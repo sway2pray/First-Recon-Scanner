@@ -5,15 +5,19 @@
 
 -Performs web fuzzing with several dictionaries.
 
-Most scans run in parallel, so it's faster then most of the manual.
+-Checks for guest and anonymous logins to SMB
+
+-Enumerates SMB shares if availible and extracts userlists
+
+Most scans run in parallel, so it's faster then most of the manual work.
 
 Written in Python standart libs.
 
 ## Planning to add:
-SMB, DBs, WinRM, LDAP, SNMP, vhost enumeration, maybe SQLmap and other.
+Redis, WinRM, LDAP, SNMP, vhost enumeration and other.
 
 ## Prerequisites & Install
-### CLI tools: nmap, ffuf, ping
+### CLI tools: nmap, ffuf, ping, netexec (nxc)
 ### Dictionaries - [SecLists](https://github.com/danielmiessler/SecLists/tree/master)
 
 1.Git clone this repo.
@@ -22,7 +26,7 @@ SMB, DBs, WinRM, LDAP, SNMP, vhost enumeration, maybe SQLmap and other.
 ```bash
 cd 'First-Recon-Scan'/
 
-pip install -e
+pip install -e .
 ```
 
 ## Usage
@@ -36,7 +40,7 @@ options:
 
 --target, -t TARGET       Target host for scanning
 
---webscan, -wb WEBSCAN    List ports for web scan like "-wb 4093,1235,9999"
+--webscan, -wb WEBSCAN    List ports for only web scan like "-wb 4093,1235,9999"
 
 --protocol, -p PROTOCOL   Set web protocol to use "-p https". Default is http.
 
@@ -48,3 +52,5 @@ NMAP https://github.com/nmap/nmap
 FFUF https://github.com/ffuf/ffuf
 
 SecLists https://github.com/danielmiessler/SecLists/tree/master
+
+NetExec https://github.com/Pennyw0rth/NetExec
